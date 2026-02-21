@@ -1,0 +1,9 @@
+{
+  "image_path": "assets/sprite.png",
+  "talk_image_path": "assets/sprite_talk.png",
+  "frame_width": 341,
+  "frame_height": 341,
+  "frame_count": 36,
+  "fps": 30,
+  "scale": 1.0
+}

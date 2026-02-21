@@ -1,0 +1,10 @@
+PyGObject
+sounddevice
+numpy
+webrtcvad
+requests
+python-dotenv
+soundfile
+vosk
+piper-tts
+kittentts
