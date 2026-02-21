@@ -83,3 +83,7 @@ python -m py_compile app.py api/*.py audio/*.py ui/*.py config.py
 - After wake, conversation keeps listening turn-by-turn until missed captures reach `CONVERSATION_MAX_MISSES`.
 - Playback falls back across `pw-play`, `aplay`, and `sounddevice`.
 - Tune recording behavior with `KEYWORD_*` and `CONVERSATION_*` variables.
+
+## Open Source
+- License: `MIT` (`LICENSE`)
+- Release process checklist: `RELEASE_CHECKLIST.md`
