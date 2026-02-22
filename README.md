@@ -5,6 +5,7 @@
 - Local wake-word detection with Vosk before cloud calls
 - ElevenLabs STT + Gemini + TTS (ElevenLabs / Kitten / Piper)
 - Continuous multi-turn conversation after wake (shared session context)
+- Configurable persona via `identity.md` + `soul.md` with built-in fallback defaults
 - Right-click menu to start or stop listening
 
 ## Requirements
@@ -37,10 +38,14 @@ cp .env.example .env
 2. Set required keys in `.env`:
 - `ELEVENLABS_API_KEY` (required for conversation STT in current app)
 - `GEMINI_API_KEY` (required for LLM responses)
-3. Choose TTS provider with `TTS_PROVIDER`:
+3. Persona defaults come from `identity.md` and `soul.md` in project root:
+- `identity.md`: assistant identity metadata (name/vibe/avatar)
+- `soul.md`: behavior rules and style
+- Optional `.env` overrides: `IDENTITY_PATH`, `SOUL_PATH`
+4. Choose TTS provider with `TTS_PROVIDER`:
 - `piper` or `kitten` do not require `VOICE_ID`
 - `elevenlabs` requires both `ELEVENLABS_API_KEY` and `VOICE_ID`
-4. Download and extract the English Vosk model into `models/`:
+5. Download and extract the English Vosk model into `models/`:
 ```bash
 mkdir -p models
 cd models
@@ -48,13 +53,19 @@ wget https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
 unzip vosk-model-small-en-us-0.15.zip
 cd ..
 ```
-5. If your model is in a different location, set `LOCAL_ASR_MODEL_PATH` in `.env`.
-6. Put your sprite sheet at `assets/sprite.png`.
-7. Edit `config/sprite.json`:
+6. If your model is in a different location, set `LOCAL_ASR_MODEL_PATH` in `.env`.
+7. Put your sprite sheet at `assets/sprite.png`.
+8. Edit `config/sprite.json`:
 - Set frame size/count/fps/scale for `image_path`
 - Optional: set `talk_image_path` for speaking animation (same frame layout as idle)
-8. Edit `config/keywords.txt` (one wake keyword per line).
-9. Optional: set `WAKE_ACK_AUDIO_PATH` to a local WAV played right after wake detection.
+9. Edit `config/keywords.txt` (one wake keyword per line).
+10. Optional: set `WAKE_ACK_AUDIO_PATH` to a local WAV played right after wake detection.
+
+## Persona System
+- Persona prompt is built from three blocks in this order: `identity.md`, `soul.md`, internal voice runtime rules (English-only, concise voice replies).
+- Default files live at project root: `identity.md`, `soul.md`.
+- Override paths with `.env`: `IDENTITY_PATH=...`, `SOUL_PATH=...`.
+- If either file is missing or empty, VoicePi automatically uses built-in defaults and logs a `[prompt]` warning at startup.
 
 ## TTS Providers
 - `TTS_PROVIDER=elevenlabs`: uses `ELEVENLABS_API_KEY` + `VOICE_ID`
@@ -74,7 +85,7 @@ GTK_A11Y=none python app.py
 
 ## Quick Check
 ```bash
-python -m py_compile app.py api/*.py audio/*.py ui/*.py config.py
+python -m py_compile app.py api/*.py audio/*.py ui/*.py config.py prompt_builder.py
 ```
 
 ## Notes

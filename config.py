@@ -35,6 +35,8 @@ class AppConfig:
     wake_ack_gap_seconds: float
     wake_ack_min_lead_silence_seconds: float
     keywords: list[str]
+    soul_path: Path
+    identity_path: Path
     sprite_image_path: Path
     sprite_talk_image_path: Path | None
     sprite_frame_width: int
@@ -103,6 +105,10 @@ def load_config() -> AppConfig:
     wake_ack_min_lead_silence_seconds = float(
         os.getenv("WAKE_ACK_MIN_LEAD_SILENCE_SECONDS", "0.45").strip()
     )
+    soul_path = os.getenv("SOUL_PATH", "").strip() or str(BASE_DIR / "soul.md")
+    identity_path = os.getenv("IDENTITY_PATH", "").strip() or str(
+        BASE_DIR / "identity.md"
+    )
 
     piper_model = os.getenv("PIPER_MODEL", "en_US-lessac-medium").strip()
     piper_speaker = int(os.getenv("PIPER_SPEAKER", "0").strip())
@@ -146,6 +152,8 @@ def load_config() -> AppConfig:
         wake_ack_gap_seconds=wake_ack_gap_seconds,
         wake_ack_min_lead_silence_seconds=wake_ack_min_lead_silence_seconds,
         keywords=keywords,
+        soul_path=Path(soul_path).expanduser().resolve(),
+        identity_path=Path(identity_path).expanduser().resolve(),
         sprite_image_path=image_path,
         sprite_talk_image_path=talk_image_path,
         sprite_frame_width=int(sprite_cfg["frame_width"]),

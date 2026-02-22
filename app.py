@@ -19,13 +19,8 @@ from audio.recorder import VADRecorder
 from audio.tts_factory import build_tts_provider
 from audio.tts_provider import TTSProvider
 from config import load_config
+from prompt_builder import build_system_prompt, build_system_prompt_with_warnings
 from ui.sprite_window import SpriteWindow
-
-SYSTEM_PROMPT = (
-    "You are a desktop pet assistant. "
-    "Always reply in English only. Keep responses concise and natural for voice chat, "
-    "usually 1-2 short sentences. Be helpful, but avoid long explanations unless asked."
-)
 
 
 class VoicePetApp(Gtk.Application):
@@ -38,10 +33,14 @@ class VoicePetApp(Gtk.Application):
         self._tts_init_error: str | None = None
         self._conversation_lock = threading.Lock()
         self._last_status = ""
+        self._system_prompt = ""
 
     def do_activate(self):
         cfg = load_config()
         self._cfg = cfg
+        self._system_prompt, prompt_warnings = build_system_prompt_with_warnings(cfg)
+        for warning in prompt_warnings:
+            print(f"[prompt] {warning}", flush=True)
 
         self._eleven = ElevenLabsClient(cfg.elevenlabs_api_key, cfg.voice_id)
         self._gemini = GeminiClient(cfg.gemini_api_key, model=cfg.gemini_model)
@@ -182,6 +181,7 @@ class VoicePetApp(Gtk.Application):
             if cfg is None:
                 self._set_status("Config missing")
                 return
+            system_prompt = self._system_prompt or build_system_prompt(cfg)
             max_misses = max(1, cfg.conversation_max_misses)
             session_messages: list[dict[str, str]] = []
             miss_count = 0
@@ -243,7 +243,7 @@ class VoicePetApp(Gtk.Application):
                 session_messages.append({"role": "user", "text": text})
 
                 llm_start = time.perf_counter()
-                reply = self._gemini.generate_with_history(session_messages, SYSTEM_PROMPT)
+                reply = self._gemini.generate_with_history(session_messages, system_prompt)
                 llm_ms = int((time.perf_counter() - llm_start) * 1000)
                 reply = (reply or "").strip()
                 if not reply:
