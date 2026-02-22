@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 import soundfile as sf
@@ -34,6 +35,140 @@ def _fallback_play_with_sounddevice(filepath: str) -> bool:
         return True
     except Exception:
         return False
+
+
+class StreamPlaybackSession:
+    def __init__(self, sample_rate: int, channels: int = 1) -> None:
+        if sample_rate <= 0:
+            raise ValueError("sample_rate must be > 0")
+        if channels <= 0:
+            raise ValueError("channels must be > 0")
+        self._sample_rate = sample_rate
+        self._channels = channels
+        self._frame_bytes = channels * 2
+        self._stream = None
+        self._proc = None
+        self._backend = ""
+        self._leftover = b""
+
+    def __enter__(self) -> StreamPlaybackSession:
+        self.start()
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
+        self.close()
+
+    def start(self) -> None:
+        if self._stream is not None or self._proc is not None:
+            return
+        if shutil.which("pw-play"):
+            self._start_pw_play()
+            return
+        self._start_sounddevice()
+
+    def _start_sounddevice(self) -> None:
+        import sounddevice as sd
+
+        self._stream = sd.RawOutputStream(
+            samplerate=self._sample_rate,
+            channels=self._channels,
+            dtype="int16",
+        )
+        self._stream.start()
+        self._backend = "sounddevice"
+
+    def _start_pw_play(self) -> None:
+        args = [
+            "pw-play",
+            "--raw",
+            "--rate",
+            str(self._sample_rate),
+            "--channels",
+            str(self._channels),
+            "--format",
+            "s16",
+            "--latency",
+            "40ms",
+            "-",
+        ]
+        self._proc = subprocess.Popen(
+            args=args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self._backend = "pw-play"
+
+    def write_pcm16(self, pcm_chunk: bytes) -> bool:
+        if not pcm_chunk:
+            return False
+        if self._stream is None and self._proc is None:
+            raise RuntimeError("stream is not started")
+        payload = self._leftover + pcm_chunk
+        if len(payload) < self._frame_bytes:
+            self._leftover = payload
+            return False
+        valid_len = len(payload) - (len(payload) % self._frame_bytes)
+        self._leftover = payload[valid_len:]
+        if valid_len <= 0:
+            return False
+        data = payload[:valid_len]
+        if self._backend == "pw-play":
+            if self._proc is None or self._proc.stdin is None:
+                raise RuntimeError("pw-play stream is not available")
+            self._proc.stdin.write(data)
+            self._proc.stdin.flush()
+        else:
+            self._stream.write(data)
+        return True
+
+    def close(self) -> None:
+        if self._stream is None and self._proc is None:
+            return
+        try:
+            if self._leftover:
+                pad = b"\x00" * (self._frame_bytes - len(self._leftover))
+                padded = self._leftover + pad
+                if self._backend == "pw-play":
+                    if self._proc is not None and self._proc.stdin is not None:
+                        self._proc.stdin.write(padded)
+                        self._proc.stdin.flush()
+                else:
+                    self._stream.write(padded)
+        finally:
+            if self._backend == "pw-play":
+                proc = self._proc
+                if proc is not None:
+                    if proc.stdin is not None:
+                        proc.stdin.close()
+                    try:
+                        proc.wait(timeout=4.0)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=1.0)
+                self._proc = None
+                self._leftover = b""
+                self._backend = ""
+                return
+            if self._stream is not None:
+                try:
+                    self._stream.stop()
+                finally:
+                    self._stream.close()
+            self._stream = None
+            self._leftover = b""
+            self._backend = ""
+
+
+def play_pcm16_stream(chunks: Iterable[bytes], sample_rate: int, channels: int = 1) -> bool:
+    wrote_any = False
+    try:
+        with StreamPlaybackSession(sample_rate=sample_rate, channels=channels) as session:
+            for chunk in chunks:
+                wrote_any = session.write_pcm16(chunk) or wrote_any
+    except Exception:
+        return False
+    return wrote_any
 
 
 def _estimate_wav_seconds(filepath: str) -> float | None:

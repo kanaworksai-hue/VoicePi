@@ -36,6 +36,10 @@ class AppConfig:
     wake_ack_min_lead_silence_seconds: float
     tts_min_lead_silence_seconds: float
     tts_playback_warmup_seconds: float
+    enable_streaming: bool
+    stream_sentence_max_chars: int
+    stream_sentence_max_wait_ms: int
+    stream_pcm_sample_rate: int
     keywords: list[str]
     soul_path: Path
     identity_path: Path
@@ -62,6 +66,20 @@ def _read_keywords(path: Path) -> list[str]:
         if item:
             keywords.append(item)
     return keywords
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{name} must be one of 1/0/true/false/yes/no/on/off (got '{raw}')"
+    )
 
 
 def load_config() -> AppConfig:
@@ -117,6 +135,16 @@ def load_config() -> AppConfig:
     )
     if tts_playback_warmup_seconds < 0:
         raise ValueError("TTS_PLAYBACK_WARMUP_SECONDS must be >= 0")
+    enable_streaming = _env_bool("ENABLE_STREAMING", True)
+    stream_sentence_max_chars = int(os.getenv("STREAM_SENTENCE_MAX_CHARS", "80").strip())
+    if stream_sentence_max_chars < 1:
+        raise ValueError("STREAM_SENTENCE_MAX_CHARS must be >= 1")
+    stream_sentence_max_wait_ms = int(os.getenv("STREAM_SENTENCE_MAX_WAIT_MS", "700").strip())
+    if stream_sentence_max_wait_ms < 0:
+        raise ValueError("STREAM_SENTENCE_MAX_WAIT_MS must be >= 0")
+    stream_pcm_sample_rate = int(os.getenv("STREAM_PCM_SAMPLE_RATE", "24000").strip())
+    if stream_pcm_sample_rate <= 0:
+        raise ValueError("STREAM_PCM_SAMPLE_RATE must be > 0")
     soul_path = os.getenv("SOUL_PATH", "").strip() or str(BASE_DIR / "soul.md")
     identity_path = os.getenv("IDENTITY_PATH", "").strip() or str(
         BASE_DIR / "identity.md"
@@ -165,6 +193,10 @@ def load_config() -> AppConfig:
         wake_ack_min_lead_silence_seconds=wake_ack_min_lead_silence_seconds,
         tts_min_lead_silence_seconds=tts_min_lead_silence_seconds,
         tts_playback_warmup_seconds=tts_playback_warmup_seconds,
+        enable_streaming=enable_streaming,
+        stream_sentence_max_chars=stream_sentence_max_chars,
+        stream_sentence_max_wait_ms=stream_sentence_max_wait_ms,
+        stream_pcm_sample_rate=stream_pcm_sample_rate,
         keywords=keywords,
         soul_path=Path(soul_path).expanduser().resolve(),
         identity_path=Path(identity_path).expanduser().resolve(),

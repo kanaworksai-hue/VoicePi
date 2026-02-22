@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Literal
+from typing import Callable, Iterator, Literal
 
 # Avoid GTK accessibility-bus warnings on minimal desktop sessions.
 os.environ.setdefault("GTK_A11Y", "none")
@@ -18,13 +18,18 @@ from api.elevenlabs import ElevenLabsClient
 from api.gemini import GeminiClient
 from audio.local_asr import LocalKeywordASR
 from audio.mic_listener import MicListener
-from audio.playback import play_audio_bytes, play_audio_file
+from audio.playback import StreamPlaybackSession, play_audio_bytes, play_audio_file
 from audio.recorder import VADRecorder
+from audio.text_streaming import SentenceChunker
 from audio.tts_factory import build_tts_provider
 from audio.tts_provider import TTSProvider
-from config import load_config
+from config import AppConfig, load_config
 from prompt_builder import build_system_prompt, build_system_prompt_with_warnings
 from ui.sprite_window import SpriteWindow
+
+
+class TTSStreamError(RuntimeError):
+    """Raised when streaming TTS generation or playback fails."""
 
 
 class VoicePetApp(Gtk.Application):
@@ -246,42 +251,27 @@ class VoicePetApp(Gtk.Application):
                 self._set_status(f"You: {text[:28]} (STT {stt_ms}ms)")
                 session_messages.append({"role": "user", "text": text})
 
-                llm_start = time.perf_counter()
-                reply = self._gemini.generate_with_history(session_messages, system_prompt)
-                llm_ms = int((time.perf_counter() - llm_start) * 1000)
+                try:
+                    reply, played, llm_ms, tts_ms = self._run_turn_response(
+                        session_messages=session_messages,
+                        system_prompt=system_prompt,
+                        cfg=cfg,
+                    )
+                except Exception as exc:
+                    self._set_status(f"Response failed: {exc}")
+                    break
                 reply = (reply or "").strip()
                 if not reply:
                     self._set_status("No LLM reply. Session ended")
                     break
                 session_messages.append({"role": "model", "text": reply})
-
-                self._set_status(f"Reply ready (LLM {llm_ms}ms). TTS...")
-                tts = self._tts
-                if tts is None:
-                    self._set_status("TTS unavailable. Session ended")
-                    break
-                tts_start = time.perf_counter()
-                try:
-                    audio = tts.generate(reply)
-                except Exception as exc:
-                    self._set_status(f"TTS error: {exc}")
-                    break
-                self._set_status("Playing...")
-                self._set_animation_state("talk")
-                try:
-                    played = play_audio_bytes(
-                        audio,
-                        min_lead_silence_seconds=cfg.tts_min_lead_silence_seconds,
-                        warmup_seconds=cfg.tts_playback_warmup_seconds,
-                    )
-                finally:
-                    self._set_animation_state("idle")
-                tts_ms = int((time.perf_counter() - tts_start) * 1000)
                 if not played:
                     self._set_status(f"Playback failed ({tts_ms}ms). Session ended")
                     break
                 turn_index += 1
-                self._set_status(f"Turn {turn_index} done (TTS+play {tts_ms}ms). Speak now.")
+                self._set_status(
+                    f"Turn {turn_index} done (LLM {llm_ms}ms, speak {tts_ms}ms). Speak now."
+                )
         except Exception as exc:
             self._set_status(f"Error: {exc}")
         finally:
@@ -298,6 +288,183 @@ class VoicePetApp(Gtk.Application):
             return True
         self._set_status(f"No valid input ({miss_count}/{max_misses})")
         return False
+
+    def _run_turn_response(
+        self,
+        session_messages: list[dict[str, str]],
+        system_prompt: str,
+        cfg: AppConfig,
+    ) -> tuple[str, bool, int, int]:
+        if cfg.enable_streaming:
+            tts = self._tts
+            if tts is not None and self._streaming_tts_method(tts) is None:
+                return self._run_non_streaming_turn(
+                    session_messages=session_messages,
+                    system_prompt=system_prompt,
+                    cfg=cfg,
+                )
+            try:
+                return self._run_streaming_turn(
+                    session_messages=session_messages,
+                    system_prompt=system_prompt,
+                    cfg=cfg,
+                )
+            except Exception as exc:
+                self._set_status(f"Streaming error: {exc}. Falling back...")
+        return self._run_non_streaming_turn(
+            session_messages=session_messages,
+            system_prompt=system_prompt,
+            cfg=cfg,
+        )
+
+    def _run_non_streaming_turn(
+        self,
+        session_messages: list[dict[str, str]],
+        system_prompt: str,
+        cfg: AppConfig,
+    ) -> tuple[str, bool, int, int]:
+        llm_start = time.perf_counter()
+        reply = self._gemini.generate_with_history(session_messages, system_prompt)
+        llm_ms = int((time.perf_counter() - llm_start) * 1000)
+        reply = (reply or "").strip()
+        if not reply:
+            return ("", False, llm_ms, 0)
+
+        tts = self._tts
+        if tts is None:
+            raise RuntimeError("TTS unavailable")
+        self._set_status(f"Reply ready (LLM {llm_ms}ms). TTS...")
+        tts_start = time.perf_counter()
+        try:
+            audio = tts.generate(reply)
+        except Exception as exc:
+            raise RuntimeError(f"TTS error: {exc}") from exc
+        self._set_status("Playing...")
+        self._set_animation_state("talk")
+        try:
+            played = play_audio_bytes(
+                audio,
+                min_lead_silence_seconds=cfg.tts_min_lead_silence_seconds,
+                warmup_seconds=cfg.tts_playback_warmup_seconds,
+            )
+        finally:
+            self._set_animation_state("idle")
+        tts_ms = int((time.perf_counter() - tts_start) * 1000)
+        return (reply, played, llm_ms, tts_ms)
+
+    def _run_streaming_turn(
+        self,
+        session_messages: list[dict[str, str]],
+        system_prompt: str,
+        cfg: AppConfig,
+    ) -> tuple[str, bool, int, int]:
+        tts = self._tts
+        if tts is None:
+            raise RuntimeError("TTS unavailable")
+        stream_tts = self._streaming_tts_method(tts)
+        if stream_tts is None:
+            raise RuntimeError(
+                f"TTS provider '{cfg.tts_provider}' does not support streaming"
+            )
+
+        self._set_status("LLM streaming...")
+        llm_start = time.perf_counter()
+        chunker = SentenceChunker(
+            max_chars=cfg.stream_sentence_max_chars,
+            max_wait_ms=cfg.stream_sentence_max_wait_ms,
+        )
+        reply_parts: list[str] = []
+        sentence_count = 0
+        played_any = False
+        saw_token = False
+        stream_error: Exception | None = None
+        tts_start: float | None = None
+
+        self._set_animation_state("talk")
+        try:
+            with StreamPlaybackSession(
+                sample_rate=cfg.stream_pcm_sample_rate, channels=1
+            ) as stream_player:
+                try:
+                    for delta in self._gemini.generate_stream_with_history(
+                        session_messages, system_prompt
+                    ):
+                        if not delta:
+                            continue
+                        saw_token = True
+                        reply_parts.append(delta)
+                        for sentence in chunker.push(delta):
+                            sentence_count += 1
+                            self._set_status(f"TTS sentence {sentence_count}...")
+                            if tts_start is None:
+                                tts_start = time.perf_counter()
+                            played_any = (
+                                self._stream_sentence_to_playback(
+                                    stream_tts, sentence, stream_player
+                                )
+                                or played_any
+                            )
+                except Exception as exc:
+                    if isinstance(exc, TTSStreamError):
+                        raise
+                    if not saw_token:
+                        raise RuntimeError(
+                            f"LLM streaming failed before first token: {exc}"
+                        ) from exc
+                    stream_error = exc
+
+                tail = chunker.finish()
+                if tail:
+                    sentence_count += 1
+                    self._set_status(f"TTS sentence {sentence_count}...")
+                    if tts_start is None:
+                        tts_start = time.perf_counter()
+                    played_any = (
+                        self._stream_sentence_to_playback(stream_tts, tail, stream_player)
+                        or played_any
+                    )
+        finally:
+            self._set_animation_state("idle")
+
+        llm_ms = int((time.perf_counter() - llm_start) * 1000)
+        if tts_start is None:
+            tts_ms = 0
+        else:
+            tts_ms = int((time.perf_counter() - tts_start) * 1000)
+        reply = "".join(reply_parts).strip()
+        if stream_error is not None and reply:
+            self._set_status(f"LLM stream interrupted: {stream_error}. Partial reply used.")
+        return (reply, played_any, llm_ms, tts_ms)
+
+    @staticmethod
+    def _streaming_tts_method(
+        tts: TTSProvider,
+    ) -> Callable[[str], Iterator[bytes]] | None:
+        method = getattr(tts, "generate_stream_pcm", None)
+        if callable(method):
+            return method
+        return None
+
+    def _stream_sentence_to_playback(
+        self,
+        stream_tts: Callable[[str], Iterator[bytes]],
+        sentence: str,
+        playback: StreamPlaybackSession,
+    ) -> bool:
+        text = sentence.strip()
+        if not text:
+            return False
+        saw_chunk = False
+        wrote_audio = False
+        try:
+            for chunk in stream_tts(text):
+                if not chunk:
+                    continue
+                saw_chunk = True
+                wrote_audio = playback.write_pcm16(chunk) or wrote_audio
+        except Exception as exc:
+            raise TTSStreamError(f"TTS stream failed: {exc}") from exc
+        return wrote_audio or saw_chunk
 
     def _set_status(self, text: str) -> None:
         if text == self._last_status:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import wave
+from typing import Iterator
 
 import requests
 
@@ -71,6 +72,37 @@ class ElevenLabsClient:
         )
         self._raise_for_status(resp, "text-to-speech")
         return resp.content
+
+    def tts_stream_pcm(
+        self,
+        text: str,
+        voice_id: str | None = None,
+        sample_rate: int = 24000,
+    ) -> Iterator[bytes]:
+        voice = voice_id or self.voice_id
+        headers = self._headers()
+        headers["accept"] = "audio/pcm"
+        payload = {
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.7,
+            },
+        }
+        params = {"output_format": f"pcm_{sample_rate}"}
+        with self._session.post(
+            f"{self.base_url}/text-to-speech/{voice}/stream",
+            headers=headers,
+            params=params,
+            json=payload,
+            timeout=(10, 180),
+            stream=True,
+        ) as resp:
+            self._raise_for_status(resp, "text-to-speech stream")
+            for chunk in resp.iter_content(chunk_size=4096):
+                if chunk:
+                    yield chunk
 
     def _raise_for_status(self, resp: requests.Response, api_name: str) -> None:
         if resp.ok:
