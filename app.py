@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Literal
+
+# Avoid GTK accessibility-bus warnings on minimal desktop sessions.
+os.environ.setdefault("GTK_A11Y", "none")
 
 import gi
 import numpy as np
