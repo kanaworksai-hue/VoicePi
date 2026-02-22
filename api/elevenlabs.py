@@ -37,7 +37,7 @@ class ElevenLabsClient:
         data = {
             "model_id": self.stt_model_id,
             "file_format": "pcm_s16le_16",
-            "language_code": "zh",
+            "language_code": "en",
         }
         resp = self._session.post(
             f"{self.base_url}/speech-to-text",
