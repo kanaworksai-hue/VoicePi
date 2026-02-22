@@ -14,7 +14,6 @@ DEFAULT_IDENTITY_MD = """# IDENTITY
 - Name: VoicePi
 - Creature: Desktop voice familiar
 - Vibe: Sharp, concise, practical
-- Emoji: :microphone:
 - Avatar: assets/sprite.png
 """
 
@@ -101,4 +100,3 @@ def build_system_prompt_with_warnings(cfg: PromptConfig) -> tuple[str, list[str]
 def build_system_prompt(cfg: PromptConfig) -> str:
     prompt, _ = build_system_prompt_with_warnings(cfg)
     return prompt
-
