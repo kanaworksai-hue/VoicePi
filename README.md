@@ -60,6 +60,8 @@ cd ..
 - Optional: set `talk_image_path` for speaking animation (same frame layout as idle)
 9. Edit `config/keywords.txt` (one wake keyword per line).
 10. Optional: set `WAKE_ACK_AUDIO_PATH` to a local WAV played right after wake detection.
+11. Optional: tune `TTS_MIN_LEAD_SILENCE_SECONDS` (default `0.30`) if the first syllable is clipped on your audio backend.
+12. Optional: enable playback warmup with `TTS_PLAYBACK_WARMUP_SECONDS` (default `0.12`) to reduce backend cold-start clipping.
 
 ## Persona System
 - Persona prompt is built from three blocks in this order: `identity.md`, `soul.md`, internal voice runtime rules (English-only, concise voice replies).

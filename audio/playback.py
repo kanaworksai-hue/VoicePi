@@ -70,7 +70,9 @@ def _leading_silence_seconds(
 
 
 def _prepare_file_with_min_lead_silence(
-    filepath: str, min_lead_silence_seconds: float
+    filepath: str,
+    min_lead_silence_seconds: float,
+    force_prepend: bool = False,
 ) -> tuple[str, str | None]:
     if min_lead_silence_seconds <= 0:
         return (filepath, None)
@@ -78,15 +80,17 @@ def _prepare_file_with_min_lead_silence(
         data, sample_rate = sf.read(filepath, dtype="float32")
     except Exception:
         return (filepath, None)
-
     lead = _leading_silence_seconds(data, sample_rate)
-    missing = min_lead_silence_seconds - lead
-    if missing <= 0:
-        _debug(
-            "lead_silence ok "
-            f"path={Path(filepath).name} lead={lead:.3f}s target={min_lead_silence_seconds:.3f}s"
-        )
-        return (filepath, None)
+    if force_prepend:
+        missing = min_lead_silence_seconds
+    else:
+        missing = min_lead_silence_seconds - lead
+        if missing <= 0:
+            _debug(
+                "lead_silence ok "
+                f"path={Path(filepath).name} lead={lead:.3f}s target={min_lead_silence_seconds:.3f}s"
+            )
+            return (filepath, None)
 
     pad_frames = int(round(missing * sample_rate))
     if pad_frames <= 0:
@@ -106,13 +110,76 @@ def _prepare_file_with_min_lead_silence(
         return (filepath, None)
     _debug(
         "lead_silence padded "
-        f"path={Path(filepath).name} lead={lead:.3f}s added={missing:.3f}s"
+        f"path={Path(filepath).name} lead={lead:.3f}s added={missing:.3f}s force={int(force_prepend)}"
     )
     return (tmp_path, tmp_path)
 
 
-def _cli_play(filepath: str, timeout_seconds: float | None = None) -> bool:
+def _warmup_backend(
+    cmd: str, sample_rate: int, channels: int, warmup_seconds: float
+) -> None:
+    if warmup_seconds <= 0 or sample_rate <= 0 or channels <= 0:
+        return
+    frames = int(round(sample_rate * warmup_seconds))
+    if frames <= 0:
+        return
+    if channels == 1:
+        data = np.zeros((frames,), dtype=np.float32)
+    else:
+        data = np.zeros((frames, channels), dtype=np.float32)
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+        sf.write(tmp_path, data, sample_rate, subtype="PCM_16", format="WAV")
+        timeout = max(2.0, warmup_seconds * 8.0 + 1.0)
+        result = subprocess.run(
+            args=[cmd, tmp_path],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+        )
+        _debug(
+            "warmup "
+            f"cmd={cmd} rc={result.returncode} seconds={warmup_seconds:.3f} "
+            f"rate={sample_rate} ch={channels}"
+        )
+    except Exception:
+        _debug(
+            "warmup exception "
+            f"cmd={cmd} seconds={warmup_seconds:.3f} rate={sample_rate} ch={channels}"
+        )
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
+def _wav_format(filepath: str) -> tuple[int, int] | None:
+    try:
+        info = sf.info(filepath)
+    except Exception:
+        return None
+    if info.samplerate <= 0 or info.channels <= 0:
+        return None
+    return (int(info.samplerate), int(info.channels))
+
+
+def _cli_play(
+    filepath: str,
+    timeout_seconds: float | None = None,
+    warmup_seconds: float = 0.0,
+) -> bool:
+    wav_format = _wav_format(filepath) if warmup_seconds > 0 else None
     for cmd in _PLAY_CMDS:
+        if wav_format is not None:
+            _warmup_backend(
+                cmd,
+                sample_rate=wav_format[0],
+                channels=wav_format[1],
+                warmup_seconds=warmup_seconds,
+            )
         for attempt in range(_PLAY_RETRIES):
             try:
                 start = time.perf_counter()
@@ -156,7 +223,11 @@ def _cli_play(filepath: str, timeout_seconds: float | None = None) -> bool:
     return _fallback_play_with_sounddevice(filepath)
 
 
-def play_audio_bytes(audio_bytes: bytes) -> bool:
+def play_audio_bytes(
+    audio_bytes: bytes,
+    min_lead_silence_seconds: float = 0.0,
+    warmup_seconds: float = 0.0,
+) -> bool:
     if not audio_bytes:
         return False
     try:
@@ -165,14 +236,27 @@ def play_audio_bytes(audio_bytes: bytes) -> bool:
         return False
 
     tmp_path = None
+    prepared_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp_path = tmp.name
         sf.write(tmp_path, data, samplerate, subtype="PCM_16", format="WAV")
-        return _cli_play(tmp_path, timeout_seconds=_play_timeout_seconds(tmp_path))
+        play_path = tmp_path
+        play_path, prepared_path = _prepare_file_with_min_lead_silence(
+            play_path,
+            min_lead_silence_seconds,
+            force_prepend=True,
+        )
+        return _cli_play(
+            play_path,
+            timeout_seconds=_play_timeout_seconds(play_path),
+            warmup_seconds=warmup_seconds,
+        )
     except Exception:
         return False
     finally:
+        if prepared_path:
+            Path(prepared_path).unlink(missing_ok=True)
         if tmp_path:
             Path(tmp_path).unlink(missing_ok=True)
 

@@ -34,6 +34,8 @@ class AppConfig:
     wake_ack_repeat: int
     wake_ack_gap_seconds: float
     wake_ack_min_lead_silence_seconds: float
+    tts_min_lead_silence_seconds: float
+    tts_playback_warmup_seconds: float
     keywords: list[str]
     soul_path: Path
     identity_path: Path
@@ -105,6 +107,16 @@ def load_config() -> AppConfig:
     wake_ack_min_lead_silence_seconds = float(
         os.getenv("WAKE_ACK_MIN_LEAD_SILENCE_SECONDS", "0.45").strip()
     )
+    tts_min_lead_silence_seconds = float(
+        os.getenv("TTS_MIN_LEAD_SILENCE_SECONDS", "0.30").strip()
+    )
+    if tts_min_lead_silence_seconds < 0:
+        raise ValueError("TTS_MIN_LEAD_SILENCE_SECONDS must be >= 0")
+    tts_playback_warmup_seconds = float(
+        os.getenv("TTS_PLAYBACK_WARMUP_SECONDS", "0.12").strip()
+    )
+    if tts_playback_warmup_seconds < 0:
+        raise ValueError("TTS_PLAYBACK_WARMUP_SECONDS must be >= 0")
     soul_path = os.getenv("SOUL_PATH", "").strip() or str(BASE_DIR / "soul.md")
     identity_path = os.getenv("IDENTITY_PATH", "").strip() or str(
         BASE_DIR / "identity.md"
@@ -151,6 +163,8 @@ def load_config() -> AppConfig:
         wake_ack_repeat=wake_ack_repeat,
         wake_ack_gap_seconds=wake_ack_gap_seconds,
         wake_ack_min_lead_silence_seconds=wake_ack_min_lead_silence_seconds,
+        tts_min_lead_silence_seconds=tts_min_lead_silence_seconds,
+        tts_playback_warmup_seconds=tts_playback_warmup_seconds,
         keywords=keywords,
         soul_path=Path(soul_path).expanduser().resolve(),
         identity_path=Path(identity_path).expanduser().resolve(),

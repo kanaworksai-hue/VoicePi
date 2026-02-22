@@ -269,7 +269,11 @@ class VoicePetApp(Gtk.Application):
                 self._set_status("Playing...")
                 self._set_animation_state("talk")
                 try:
-                    played = play_audio_bytes(audio)
+                    played = play_audio_bytes(
+                        audio,
+                        min_lead_silence_seconds=cfg.tts_min_lead_silence_seconds,
+                        warmup_seconds=cfg.tts_playback_warmup_seconds,
+                    )
                 finally:
                     self._set_animation_state("idle")
                 tts_ms = int((time.perf_counter() - tts_start) * 1000)
