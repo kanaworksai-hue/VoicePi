@@ -12,6 +12,8 @@ class GeminiClient:
         self.model = model
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
         self._session = requests.Session()
+        self.last_stream_finish_reason: str | None = None
+        self.last_stream_done_marker: bool = False
 
     def generate(self, user_text: str, system_prompt: str) -> str:
         return self.generate_with_history(
@@ -47,6 +49,8 @@ class GeminiClient:
     def generate_stream_with_history(
         self, messages: list[dict[str, str]], system_prompt: str
     ) -> Iterator[str]:
+        self.last_stream_finish_reason = None
+        self.last_stream_done_marker = False
         payload = self._build_payload(messages, system_prompt)
         errors: list[str] = []
         for model in self._model_candidates():
@@ -100,19 +104,25 @@ class GeminiClient:
                 )
 
             full_text = ""
+            finish_reason: str | None = None
+            saw_done_marker = False
             for data_str in self._iter_sse_data(resp):
                 if data_str == "[DONE]":
+                    saw_done_marker = True
                     break
                 try:
                     payload_item = json.loads(data_str)
                 except json.JSONDecodeError:
                     continue
+                finish_reason = self._extract_finish_reason(payload_item) or finish_reason
                 text = self._extract_text(payload_item)
                 if not text:
                     continue
                 delta, full_text = self._extract_delta(text, full_text)
                 if delta:
                     yield delta
+            self.last_stream_finish_reason = finish_reason
+            self.last_stream_done_marker = saw_done_marker
 
     def _extract_text(self, data: dict) -> str:
         candidates = data.get("candidates", [])
@@ -205,6 +215,19 @@ class GeminiClient:
             delta = text[len(accumulated) :]
             return delta, text
         return text, accumulated + text
+
+    @staticmethod
+    def _extract_finish_reason(data: dict) -> str | None:
+        candidates = data.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            return None
+        first = candidates[0]
+        if not isinstance(first, dict):
+            return None
+        reason = first.get("finishReason")
+        if isinstance(reason, str) and reason:
+            return reason
+        return None
 
     @staticmethod
     def _error_detail(resp: requests.Response) -> str:

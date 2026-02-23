@@ -50,6 +50,8 @@ class StreamPlaybackSession:
         self._proc = None
         self._backend = ""
         self._leftover = b""
+        self._written_frames = 0
+        self._started_at: float | None = None
 
     def __enter__(self) -> StreamPlaybackSession:
         self.start()
@@ -61,6 +63,7 @@ class StreamPlaybackSession:
     def start(self) -> None:
         if self._stream is not None or self._proc is not None:
             return
+        self._started_at = time.perf_counter()
         if shutil.which("pw-play"):
             self._start_pw_play()
             return
@@ -120,7 +123,17 @@ class StreamPlaybackSession:
             self._proc.stdin.flush()
         else:
             self._stream.write(data)
+        self._written_frames += valid_len // self._frame_bytes
         return True
+
+    def _pw_play_wait_timeout_seconds(self) -> float:
+        # Estimate remaining drain time from how many frames were written so far.
+        if self._started_at is None or self._written_frames <= 0:
+            return 6.0
+        elapsed = max(0.0, time.perf_counter() - self._started_at)
+        written_seconds = float(self._written_frames) / float(self._sample_rate)
+        remaining = max(0.0, written_seconds - elapsed)
+        return max(6.0, remaining + 8.0)
 
     def close(self) -> None:
         if self._stream is None and self._proc is None:
@@ -135,20 +148,28 @@ class StreamPlaybackSession:
                         self._proc.stdin.flush()
                 else:
                     self._stream.write(padded)
+                self._written_frames += len(padded) // self._frame_bytes
         finally:
             if self._backend == "pw-play":
                 proc = self._proc
                 if proc is not None:
                     if proc.stdin is not None:
                         proc.stdin.close()
+                    wait_timeout = self._pw_play_wait_timeout_seconds()
                     try:
-                        proc.wait(timeout=4.0)
+                        proc.wait(timeout=wait_timeout)
                     except subprocess.TimeoutExpired:
+                        _debug(
+                            "stream close timeout "
+                            f"backend=pw-play timeout={wait_timeout:.3f}s"
+                        )
                         proc.kill()
                         proc.wait(timeout=1.0)
                 self._proc = None
                 self._leftover = b""
                 self._backend = ""
+                self._written_frames = 0
+                self._started_at = None
                 return
             if self._stream is not None:
                 try:
@@ -158,6 +179,8 @@ class StreamPlaybackSession:
             self._stream = None
             self._leftover = b""
             self._backend = ""
+            self._written_frames = 0
+            self._started_at = None
 
 
 def play_pcm16_stream(chunks: Iterable[bytes], sample_rate: int, channels: int = 1) -> bool:

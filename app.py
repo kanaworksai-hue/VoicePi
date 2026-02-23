@@ -432,6 +432,16 @@ class VoicePetApp(Gtk.Application):
         else:
             tts_ms = int((time.perf_counter() - tts_start) * 1000)
         reply = "".join(reply_parts).strip()
+        finish_reason = getattr(self._gemini, "last_stream_finish_reason", None)
+        saw_done_marker = bool(getattr(self._gemini, "last_stream_done_marker", False))
+        if not saw_done_marker and not finish_reason and reply:
+            self._set_status("LLM stream ended without done marker. Partial reply used.")
+        if (
+            finish_reason
+            and finish_reason not in {"STOP", "FINISH_REASON_UNSPECIFIED"}
+            and reply
+        ):
+            self._set_status(f"LLM finished with {finish_reason}. Partial reply used.")
         if stream_error is not None and reply:
             self._set_status(f"LLM stream interrupted: {stream_error}. Partial reply used.")
         return (reply, played_any, llm_ms, tts_ms)

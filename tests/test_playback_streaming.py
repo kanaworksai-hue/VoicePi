@@ -45,3 +45,24 @@ def test_play_pcm16_stream_returns_false_on_failure(monkeypatch) -> None:
     ok = playback.play_pcm16_stream([b"\x01\x00\x02\x00"], sample_rate=24000)
 
     assert not ok
+
+
+def test_pw_play_wait_timeout_scales_with_remaining_audio(monkeypatch) -> None:
+    session = playback.StreamPlaybackSession(sample_rate=24000, channels=1)
+    session._started_at = 10.0
+    session._written_frames = 12 * 24000
+
+    monkeypatch.setattr(playback.time, "perf_counter", lambda: 15.0)
+
+    timeout = session._pw_play_wait_timeout_seconds()
+
+    # 12s written - 5s elapsed = 7s remaining; timeout adds 8s margin.
+    assert timeout == 15.0
+
+
+def test_pw_play_wait_timeout_uses_minimum_without_timing() -> None:
+    session = playback.StreamPlaybackSession(sample_rate=24000, channels=1)
+
+    timeout = session._pw_play_wait_timeout_seconds()
+
+    assert timeout == 6.0

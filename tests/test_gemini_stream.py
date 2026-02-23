@@ -44,3 +44,11 @@ def test_iter_sse_data_collects_events() -> None:
     out = list(GeminiClient._iter_sse_data(resp))
 
     assert out == ['{"a":1}', '{"b":2}\n{"c":3}']
+
+
+def test_extract_finish_reason_reads_first_candidate() -> None:
+    payload = {"candidates": [{"finishReason": "MAX_TOKENS"}]}
+
+    reason = GeminiClient._extract_finish_reason(payload)
+
+    assert reason == "MAX_TOKENS"
